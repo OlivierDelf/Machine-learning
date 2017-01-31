@@ -1,33 +1,259 @@
-# History files
-.Rhistory
-.Rapp.history
+# You can directly run the program until the line 208 
+# and will get the RMSE and RMSLE of the count prediction. From line 208 to line 231, it is the rforest model to compare the result with randomForest.
+# After line 231 it is plot for the PDF response document
+set.seed(143)
+setwd("C:/Users/olivi/Documents/04-Programmation/R/Velib")
+data = read.csv("C:/Users/olivi/Documents/04-Programmation/R/Velib/data.csv")
+View(data)
+str(data)
+summary(data)
+table(is.na(data)) # we can check that there is no missing values.
 
-# Session Data files
-.RData
+# change the type of some features
+data$holiday=as.factor(data$holiday)
+data$workingday=as.factor(data$workingday)
 
-# Example code in package build process
-*-Ex.R
+#news features ------------------------------------------------------------------------
+# extract the year, month, hour features
+data$year = as.factor(substr(data$datetime, 3, 4) )  # I could have delete the 3, but I keep it if we got more data (previous years...)
+data$month = as.factor(substr(data$datetime, 6, 7) )
+data$hour = as.factor(substr(data$datetime, 12, 13) )
 
-# Output files from R CMD build
-/*.tar.gz
+# extract the day feature, and use lubridate to get each day of the week (Sunday to Saturday)
+data$day = as.factor(substr(data$datetime, 9, 10) )
 
-# Output files from R CMD check
-/*.Rcheck/
+library(lubridate)
+Date = as.Date(data$datetime)
+data$yday = as.factor(yday(Date))
+data$wday = as.factor(wday(Date))  # 7 saturday
 
-# RStudio files
-.Rproj.user/
+# The number of user evolve with the time, subdivise the 2 years : year_piece
+data$month = as.numeric(data$month)
+data$year_piece[data$year=='11']=1
+data$year_piece[data$year=='11' & data$month>2]=2
+data$year_piece[data$year=='11' & data$month>4]=3
+data$year_piece[data$year=='11' & data$month>6]=4
+data$year_piece[data$year=='11' & data$month>8]=5
+data$year_piece[data$year=='11' & data$month>10]=6
+data$year_piece[data$year=='12']=7
+data$year_piece[data$year=='12' & data$month>2]=8
+data$year_piece[data$year=='12' & data$month>4]=9
+data$year_piece[data$year=='12' & data$month>6]=10
+data$year_piece[data$year=='12' & data$month>8]=11
+data$year_piece[data$year=='12' & data$month>10]=12
+table(data$year_piece)
+data$month = as.factor(data$month)
 
-# produced vignettes
-vignettes/*.html
-vignettes/*.pdf
+# atemp seems is an important feature, we will use his square to increase his influence.
+data$atemp_sq = data$atemp**2
 
-# OAuth2 token, see https://github.com/hadley/httr/releases/tag/v0.3
-.httr-oauth
+#split the data : we have to create our new features depending of the training and not the testing set. Even if we use an other
+#set of training and testing test later. It is the best way to be sure that our model is robust.
+#if we do not do it, our model could not be good if we have new examples later.
+library(caTools)
+split = sample.split(data$count, SplitRatio=0.7)
+train = subset( data, split==TRUE)
+test = subset(data, split==FALSE)
 
-# knitr and R markdown default cache directories
-/*_cache/
-/cache/
+library(rpart)
+library(rattle)
+library(rpart.plot)
+library(RColorBrewer)
 
-# Temporary files created by R markdown
-*.utf8.md
-*.knit.md
+# New hour variable : hour_reg and hour_cas, we use a tree to find the good subdivision, clustering may work too.
+data$hour = as.integer(data$hour)
+reg_hour =rpart(registered ~ hour,data=train)
+fancyRpartPlot(reg_hour)
+
+cas_hour =rpart(casual ~ hour,data=train)
+fancyRpartPlot(cas_hour)
+
+data$hour_reg = 0
+data$hour_reg[data$hour < 8] = 1
+data$hour_reg[data$hour >= 22] = 2
+data$hour_reg[data$hour >= 10 & data$hour < 18]=3
+data$hour_reg[data$hour == 9] = 4
+data$hour_reg[data$hour == 8] = 5
+data$hour_reg[data$hour == 20 | data$hour == 21] = 6
+
+data$hour_cas = 0
+data$hour_cas[data$hour < 9] = 1
+data$hour_cas[data$hour == 9] = 2
+data$hour_cas[data$hour >= 20] = 3
+
+# humidity factor: humidity_reg and humidity_cas
+reg_humidity = rpart(registered ~ humidity,data=train)
+fancyRpartPlot(reg_humidity)
+
+data$humidity_reg = 0
+data$humidity_reg[data$humidity >= 66] = 1
+data$humidity_reg[data$humidity < 46] = 2
+
+cas_humidity = rpart(casual ~ humidity,data=train)
+fancyRpartPlot(cas_humidity) 
+
+data$humidity_cas = 0
+data$humidity_cas[data$humidity >= 74] = 1
+data$humidity_cas[data$humidity < 74 & data$humidity >=56 ] = 2
+data$humidity_cas[data$humidity < 40] = 3
+
+# transform atemp in factor widely : reg_atemp and cas_atemp
+reg_atemp=rpart(registered ~ atemp_sq,data=train)
+fancyRpartPlot(reg_atemp)
+
+data$atemp_reg = 0
+data$atemp_reg[data$atemp >= 800] = 1
+data$atemp_reg[data$atemp < 800 & data$atemp >= 404] = 2
+data$atemp_reg[data$atemp < 142] = 3
+
+cas_atemp=rpart(casual ~ atemp_sq,data=train)
+fancyRpartPlot(cas_atemp)
+
+data$atemp_cas = 0
+data$atemp_cas[data$atemp >= 848] = 1
+data$atemp_cas[data$atemp < 848 & data$atemp >= 546] = 2
+data$atemp_cas[data$atemp <= 230] = 3
+
+data$atemp_reg = as.factor(data$atemp_reg)
+data$atemp_cas = as.factor(data$atemp_cas)
+
+# the hour and the season for register and then casual : hs_reg and hs_cas
+data$hs_reg = as.factor((data$hour_reg) * (data$season+0.01))
+data$hs_cas = as.factor((data$hour_cas) * (data$season+0.01))
+
+# weather and season : ws
+data$ws = as.factor(data$weather * (data$season+0.01))
+
+data$season = as.factor(data$season)
+data$weather=as.factor(data$weather)
+
+"# humidity_reg and season  : it decrease the result
+data$hus_reg = as.factor(data$humidity_reg * (as.numeric(data$season)+0.01))
+data$hus_cas = as.factor(data$humidity_cas * (as.numeric(data$season)+0.01))
+"
+
+#humidity_reg and atemp_reg : hutemp_reg and hutemp_cas
+data$hutemp_reg = as.factor(data$humidity_reg * (as.numeric(data$atemp_reg)+0.01))
+data$hutemp_cas = as.factor(data$humidity_cas * (as.numeric(data$atemp_cas)+0.01))
+
+data$humidity_reg = as.factor(data$humidity_reg)
+data$humidity_cas = as.factor(data$humidity_cas)
+
+# create a feature for the type day : working, weekend, holidays
+data$work_type=""
+data$work_type[data$wday==7 | data$wday==1] = "weekend"
+data$work_type[data$holiday==1] = "holiday"
+data$work_type[data$holiday==0 & data$workingday==1] = "working"
+#data$work_type[data$workingday==0 & data$wday!=7 & data$wday!=1 & data$holiday==0 ] = "férié"    no one in the data
+data$work_type = as.factor(data$work_type)
+
+#create feature for the monday and the friday for casual only
+data$mondayf_cas = 0
+data$mondayf_cas[data$wday==2 | data$wday==6] = 1
+data$mondayf_cas = as.factor(data$mondayf_cas)
+
+# Our model will perform better with factor, so we change the type of some features.
+data$hour_reg =as.factor(data$hour_reg)
+data$hour_cas = as.factor(data$hour_cas)
+data$year_piece = as.factor(data$year_piece)
+data$hour = as.factor(data$hour)
+data$season = as.factor(data$season)
+
+#it is a new split (we could have keep the same, but it is not gonna change anything if we try a new model later with cross validation)
+split = sample.split(data$count, SplitRatio=0.7)
+train = subset( data, split==TRUE)
+test = subset(data, split==FALSE)
+
+# news outputs
+train$logreg=log(train$registered*2+2)
+train$logcas=log(train$casual*2+2)
+
+#predicting the log of registered users. ---------------------------------------------
+form_reg = logreg ~ atemp_sq + work_type + hutemp_reg  + humidity_reg + atemp_reg + ws + hs_reg + hour_reg + year_piece+ atemp + holiday + humidity +weather+ windspeed + hour +month + wday + year + workingday
+form_cas = logcas ~ mondayf_cas + atemp_sq + work_type + hutemp_reg  + humidity_reg + atemp_cas + ws + hs_reg + hour_reg + year_piece+ atemp + holiday + humidity +weather+ windspeed + hour +month + wday + year + workingday
+
+#randomForest  ----------------------------------------------------------------------------------------
+  
+library(randomForest)
+library(ROCR)
+library(rpart)
+
+fit.logregistered = randomForest(form_reg, data=train,importance=TRUE, ntree = 200)
+predict.logregistered = predict(fit.logregistered,test)
+
+library(pROC)
+varImpPlot(fit.logregistered)
+
+# casual
+fit.logcasual = randomForest(form_cas, data=train,importance=TRUE, ntree = 200)
+predict.logcasual=predict(fit.logcasual,test)
+
+varImpPlot(fit.logcasual)
+
+#
+test$pred_registered = 0.5*(exp(predict.logregistered)-2)
+test$pred_casual = 0.5*(exp(predict.logcasual)-2)
+test$pred_count = test$pred_casual + test$pred_registered
+
+# check the accuracy
+rmsle(test$registered, test$pred_registered)
+rmse(test$registered, test$pred_registered)
+
+rmsle(test$casual, test$pred_casual)
+rmse(test$casual, test$pred_casual)
+
+rmsle(test$count, test$pred_count)
+rmse(test$count, test$pred_count)
+
+#  cforest   --------------------------------------------- 
+library(party)
+library(Metrics)
+
+fit.logregistered = cforest(form_reg, data = train, controls=cforest_unbiased(ntree=200, mtry=10))
+predict.logregistered = predict(fit.logregistered,test, OOB=TRUE)
+
+fit.logcasual = cforest(form_cas, data = train, controls=cforest_unbiased(ntree=200, mtry=10))
+predict.logcasual = predict(fit.logcasual,test, OOB=TRUE)
+
+test$pred_registered = 0.5*(exp(predict.logregistered)-2)
+test$pred_casual = 0.5*(exp(predict.logcasual)-2)
+test$pred_count = test$pred_casual + test$pred_registered
+
+rmsle(test$registered, test$pred_registered)
+rmse(test$registered, test$pred_registered)
+
+rmsle(test$casual, test$pred_casual)
+rmse(test$casual, test$pred_casual)
+
+rmsle(test$count, test$pred_count)
+rmse(test$count, test$pred_count)
+
+#  plot for the response document  -------------------------------------------------------------------------------------
+par(mfrow=c(1,2))
+
+#registered ~ hour
+boxplot(data$registered~data$hour,xlab="hour", ylab="registered", main="influence de l'heure sur les emprunteurs réguliers de vélos ")
+boxplot(data$casual~data$hour,xlab="hour", ylab="casual", main="influence de l'heure sur les emprunteurs occasionnels de vélos ")
+
+# count ~ year_part
+boxplot(data$count~data$year_piece,xlab="year_piece (chaque intervalle représente 2 mois)", ylab="count", main="évolution du nombre de vélos emprunter de 2011 à 2012 ")
+
+# registered ~ wday
+boxplot(data$registered ~ data$wday, xlab="wday : jour de la semaine (1 = Dimanche)", ylab="registered", main="évolution de la demande en vélo durant la semaine (registered)")
+boxplot(data$casual ~ data$wday, xlab="wday : jour de la semaine (1 = Dimanche)", ylab="casual", main="évolution de la demande en vélo durant la semaine (casual)")
+aggregate(data[,"count",],list(data$wday),mean)
+aggregate(data[,"registered",],list(data$wday),mean)
+aggregate(data[,"casual",],list(data$wday),mean)
+
+#Influence de atemp
+boxplot(log(data$registered) ~ data$atemp_sq, xlab="température ressentie au carrée", ylab="log(registered)", main="Influence du carré de la température ressentie sur l'emprunt de vélos")
+plot( data$atemp**2,data$yday)
+aggregate(data[,"atemp_sq",],list(data$season),mean)
+
+# plot count, casual, registered depending of hour
+boxplot(log(train$count)~train$hour,xlab="hour", ylab="log(count)")
+boxplot(log(train$casual)~train$hour,xlab="hour", ylab="log(casual)")
+boxplot(log(train$registered)~train$hour,xlab="hour", ylab="log(registered)")
+
+# count ~ hutemp_reg
+boxplot(log(train$casual)~train$hutemp_reg,xlab="hutemp_reg", ylab="log(casual)")
